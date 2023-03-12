@@ -52,5 +52,6 @@ func (t Task) Description() string {
 	if description == "" {
 		description = "No Description"
 	}
+	description = strings.ReplaceAll(description, "\n", "↵ ")
 	return description
 }
