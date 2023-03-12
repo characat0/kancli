@@ -17,7 +17,7 @@ import (
 type Config struct {
 	Lists []struct {
 		Items []string `json:"items"`
-	} `json:"lists"`
+	} `json:"Lists"`
 }
 
 type Board struct {
@@ -69,7 +69,7 @@ func defaultConfig() []byte {
 		listString[i] = `{ "items": [] }`
 	}
 	return []byte(fmt.Sprintf(`{
-	"lists": [
+	"Lists": [
 %s
 	]
 }`, strings.Join(listString, ",\n")))
@@ -136,6 +136,40 @@ func (b Board) Init() tea.Cmd {
 	}
 }
 
+func removeItemFromSlice[T any](slice []T, s int) []T {
+	return append(slice[:s], slice[s+1:]...)
+}
+
+type updateLists struct {
+	Lists map[status.Status][]list.Item
+}
+
+func (b Board) CurrentList() list.Model {
+	return b.Lists[b.Focused]
+}
+
+func (b *Board) MoveToNext() tea.Msg {
+	if len(b.Lists[b.Focused].Items()) == 0 {
+		return nil
+	}
+	i := b.CurrentList().Index()
+	currentStatus := b.Focused
+	nextStatus := status.Next(currentStatus)
+	items := b.CurrentList().Items()
+	item := items[i]
+	items = removeItemFromSlice(items, i)
+	nextItems := b.Lists[nextStatus].Items()
+	nextItems = append(nextItems, item)
+	msg := updateLists{Lists: map[status.Status][]list.Item{
+		currentStatus: items,
+		nextStatus:    nextItems,
+	}}
+	selectedTask := item.(task.Task)
+	b.Config.Lists[b.Focused].Items = removeItemFromSlice(b.Config.Lists[b.Focused].Items, i)
+	b.Config.Lists[nextStatus].Items = append(b.Config.Lists[nextStatus].Items, selectedTask.Path)
+	return msg //updateLists{Statuses: []status.Status{b.Focused, nextStatus}}
+}
+
 func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -144,12 +178,20 @@ func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			b.Focused = status.Next(b.Focused)
 		case "left":
 			b.Focused = status.Prev(b.Focused)
+		case " ":
+			return b, b.MoveToNext
 		}
 	case ReadyMsg:
 		b.Ready = true
 		b.Lists = msg.Lists
 		b.Config = msg.Config
 
+	case updateLists:
+		for i, v := range msg.Lists {
+			b.Lists[i].SetItems(v)
+		}
+		l := b.CurrentList()
+		(&l).ResetSelected()
 	case tea.WindowSizeMsg:
 		b.Width = msg.Width
 		b.Height = msg.Height
