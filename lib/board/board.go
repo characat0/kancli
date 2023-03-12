@@ -190,8 +190,6 @@ func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, v := range msg.Lists {
 			b.Lists[i].SetItems(v)
 		}
-		l := b.CurrentList()
-		(&l).ResetSelected()
 	case tea.WindowSizeMsg:
 		b.Width = msg.Width
 		b.Height = msg.Height
