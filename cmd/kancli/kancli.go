@@ -47,7 +47,11 @@ func (r RootModel) View() string {
 
 func Run() error {
 	rootModel := RootModel{Models: []tea.Model{board.New()}, Current: Board}
-	p := tea.NewProgram(rootModel)
+	p := tea.NewProgram(
+		rootModel,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
 	_, err := p.Run()
 	if err != nil {
 		return err

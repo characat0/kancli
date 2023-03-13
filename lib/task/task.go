@@ -1,6 +1,8 @@
 package task
 
 import (
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/mitchellh/go-homedir"
 	"os"
 	"strings"
@@ -54,4 +56,37 @@ func (t Task) Description() string {
 	}
 	description = strings.ReplaceAll(description, "\n", "↵ ")
 	return description
+}
+
+type ContentRenderedMsg string
+
+func (t Task) Render(width int) tea.Cmd {
+	return func() tea.Msg {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(width),
+			glamour.WithPreservedNewLines(),
+			glamour.WithEmoji(),
+		)
+		if err != nil {
+			panic(err)
+		}
+		out, err := r.Render(t.Content)
+		if err != nil {
+			panic(err)
+		}
+		// trim lines
+		lines := strings.Split(out, "\n")
+
+		var content string
+		for i, s := range lines {
+			content += strings.TrimSpace(s)
+
+			// don't add an artificial newline after the last split
+			if i+1 < len(lines) {
+				content += "\n"
+			}
+		}
+		return ContentRenderedMsg(content)
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"kancli/lib/status"
@@ -21,12 +22,14 @@ type Config struct {
 }
 
 type Board struct {
-	Lists   []list.Model
-	Config  Config
-	Focused status.Status
-	Ready   bool
-	Width   int
-	Height  int
+	Lists      []list.Model
+	Pager      viewport.Model
+	Config     Config
+	Focused    status.Status
+	Ready      bool
+	Width      int
+	Height     int
+	RenderTask bool
 }
 
 var (
@@ -125,6 +128,7 @@ func InitLists(config Config, lists []list.Model) []list.Model {
 type ReadyMsg struct {
 	Lists  []list.Model
 	Config Config
+	Pager  viewport.Model
 }
 
 func (b Board) Init() tea.Cmd {
@@ -132,7 +136,9 @@ func (b Board) Init() tea.Cmd {
 		lists := make([]list.Model, status.NumberOfStatus)
 		config := getConfig()
 		lists = InitLists(config, lists)
-		return ReadyMsg{Lists: lists, Config: config}
+		pager := viewport.New(0, 0)
+		pager.YPosition = 0
+		return ReadyMsg{Lists: lists, Config: config, Pager: pager}
 	}
 }
 
@@ -140,7 +146,7 @@ func removeItemFromSlice[T any](slice []T, s int) []T {
 	return append(slice[:s], slice[s+1:]...)
 }
 
-type updateLists struct {
+type UpdateLists struct {
 	Lists map[status.Status][]list.Item
 }
 
@@ -160,50 +166,77 @@ func (b *Board) MoveToNext() tea.Msg {
 	items = removeItemFromSlice(items, i)
 	nextItems := b.Lists[nextStatus].Items()
 	nextItems = append(nextItems, item)
-	msg := updateLists{Lists: map[status.Status][]list.Item{
+	msg := UpdateLists{Lists: map[status.Status][]list.Item{
 		currentStatus: items,
 		nextStatus:    nextItems,
 	}}
 	selectedTask := item.(task.Task)
 	b.Config.Lists[b.Focused].Items = removeItemFromSlice(b.Config.Lists[b.Focused].Items, i)
 	b.Config.Lists[nextStatus].Items = append(b.Config.Lists[nextStatus].Items, selectedTask.Path)
-	return msg //updateLists{Statuses: []status.Status{b.Focused, nextStatus}}
+	return msg
+}
+
+func (b Board) CurrentTask() task.Task {
+	return b.CurrentList().SelectedItem().(task.Task)
 }
 
 func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var (
+		cmd  tea.Cmd
+		cmds []tea.Cmd
+	)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "ctrl+c", "q":
+			return b, tea.Quit
 		case "right":
 			b.Focused = status.Next(b.Focused)
 		case "left":
 			b.Focused = status.Prev(b.Focused)
 		case " ":
 			return b, b.MoveToNext
+		case "enter":
+			b.RenderTask = !b.RenderTask
+			b.Pager.Height = b.Height
+			return b, b.CurrentTask().Render(b.Width)
 		}
 	case ReadyMsg:
 		b.Ready = true
 		b.Lists = msg.Lists
 		b.Config = msg.Config
+		b.Pager = msg.Pager
 
-	case updateLists:
+	case UpdateLists:
 		for i, v := range msg.Lists {
 			b.Lists[i].SetItems(v)
 		}
 	case tea.WindowSizeMsg:
 		b.Width = msg.Width
 		b.Height = msg.Height
+		b.Pager.Width = b.Width
+		b.Pager.Height = b.Height
+		if b.RenderTask {
+			return b, b.CurrentTask().Render(b.Width)
+		}
+	case task.ContentRenderedMsg:
+		b.Pager.SetContent(string(msg))
 	}
-	var cmd tea.Cmd
-	if b.Ready {
+	if b.RenderTask {
+		b.Pager, cmd = b.Pager.Update(msg)
+		return b, cmd
+	} else if b.Ready {
 		b.Lists[b.Focused], cmd = b.Lists[b.Focused].Update(msg)
 	}
-	return b, cmd
+	return b, tea.Batch(cmds...)
 }
 
 func (b Board) View() string {
 	if !b.Ready {
 		return fmt.Sprintf("loading... [%+v], %v, %v", b.Lists, b.Width, b.Height)
+	}
+	if b.RenderTask {
+		return b.Pager.View()
 	}
 	b.Resize()
 	var views []string
