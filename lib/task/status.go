@@ -1,4 +1,4 @@
-package status
+package task
 
 type Status int
 

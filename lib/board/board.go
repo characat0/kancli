@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"kancli/lib/status"
 	"kancli/lib/task"
 	"os"
 	"path"
@@ -21,15 +20,18 @@ type Config struct {
 	} `json:"Lists"`
 }
 
+type state int
+
 type Board struct {
 	Lists      []list.Model
 	Pager      viewport.Model
 	Config     Config
-	Focused    status.Status
+	Focused    task.Status
 	Ready      bool
 	Width      int
 	Height     int
 	RenderTask bool
+	state      state
 }
 
 var (
@@ -67,7 +69,7 @@ func (b Board) Resize() {
 }
 
 func defaultConfig() []byte {
-	listString := make([]string, status.NumberOfStatus)
+	listString := make([]string, task.NumberOfStatus)
 	for i := range listString {
 		listString[i] = `{ "items": [] }`
 	}
@@ -109,7 +111,7 @@ func getConfig() Config {
 func InitLists(config Config, lists []list.Model) []list.Model {
 	defaultList := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	defaultList.SetShowHelp(false)
-	for i, v := range status.StatusNames {
+	for i, v := range task.StatusNames {
 		lists[i] = defaultList
 		lists[i].Title = v
 		var items []list.Item
@@ -133,7 +135,7 @@ type ReadyMsg struct {
 
 func (b Board) Init() tea.Cmd {
 	return func() tea.Msg {
-		lists := make([]list.Model, status.NumberOfStatus)
+		lists := make([]list.Model, task.NumberOfStatus)
 		config := getConfig()
 		lists = InitLists(config, lists)
 		pager := viewport.New(0, 0)
@@ -147,7 +149,7 @@ func removeItemFromSlice[T any](slice []T, s int) []T {
 }
 
 type UpdateLists struct {
-	Lists map[status.Status][]list.Item
+	Lists map[task.Status][]list.Item
 }
 
 func (b Board) CurrentList() list.Model {
@@ -160,13 +162,13 @@ func (b *Board) MoveToNext() tea.Msg {
 	}
 	i := b.CurrentList().Index()
 	currentStatus := b.Focused
-	nextStatus := status.Next(currentStatus)
+	nextStatus := task.Next(currentStatus)
 	items := b.CurrentList().Items()
 	item := items[i]
 	items = removeItemFromSlice(items, i)
 	nextItems := b.Lists[nextStatus].Items()
 	nextItems = append(nextItems, item)
-	msg := UpdateLists{Lists: map[status.Status][]list.Item{
+	msg := UpdateLists{Lists: map[task.Status][]list.Item{
 		currentStatus: items,
 		nextStatus:    nextItems,
 	}}
@@ -191,9 +193,9 @@ func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return b, tea.Quit
 		case "right":
-			b.Focused = status.Next(b.Focused)
+			b.Focused = task.Next(b.Focused)
 		case "left":
-			b.Focused = status.Prev(b.Focused)
+			b.Focused = task.Prev(b.Focused)
 		case " ":
 			return b, b.MoveToNext
 		case "enter":
