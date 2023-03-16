@@ -30,7 +30,9 @@ func (t Task) FilterValue() string {
 }
 
 func (t Task) Title() string {
-	stringParts := strings.SplitN(strings.ReplaceAll(t.Content, "\r\n", "\n"), "\n", 2)
+	c := t.Content
+	c = strings.TrimSpace(c)
+	stringParts := strings.SplitN(strings.ReplaceAll(c, "\r\n", "\n"), "\n", 2)
 	title := ""
 	if len(stringParts) >= 1 {
 		title = stringParts[0]
@@ -45,7 +47,9 @@ func (t Task) Title() string {
 }
 
 func (t Task) Description() string {
-	stringParts := strings.SplitN(strings.ReplaceAll(t.Content, "\r\n", "\n"), "\n", 2)
+	c := t.Content
+	c = strings.TrimSpace(c)
+	stringParts := strings.SplitN(strings.ReplaceAll(c, "\r\n", "\n"), "\n", 2)
 	description := ""
 
 	if len(stringParts) >= 2 {
