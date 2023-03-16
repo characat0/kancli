@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mitchellh/go-homedir"
 	"kancli/lib/task"
+	"math/rand"
 	"os"
 	"path"
 	"strings"
@@ -22,16 +25,22 @@ type Config struct {
 
 type state int
 
+const (
+	BoardView state = iota
+	TaskView
+	TaskEdit
+)
+
 type Board struct {
-	Lists      []list.Model
-	Pager      viewport.Model
-	Config     Config
-	Focused    task.Status
-	Ready      bool
-	Width      int
-	Height     int
-	RenderTask bool
-	state      state
+	Lists   []list.Model
+	Pager   viewport.Model
+	Config  Config
+	Focused task.Status
+	Ready   bool
+	Width   int
+	Height  int
+	Editor  textarea.Model
+	state   state
 }
 
 var (
@@ -80,13 +89,19 @@ func defaultConfig() []byte {
 }`, strings.Join(listString, ",\n")))
 }
 
-func getConfig() Config {
+func configPath() string {
 	p, err := os.UserHomeDir()
 	if err != nil {
 		panic(err)
 	}
 	configFile := path.Join(p, "kancli", "config.json")
-	err = os.MkdirAll(path.Join(p, "kancli"), os.ModePerm)
+	return configFile
+}
+
+func getConfig() Config {
+	configFile := configPath()
+	p, err := os.UserHomeDir()
+	err = os.MkdirAll(path.Join(p, "kancli", "tasks"), os.ModePerm)
 	if err != nil {
 		panic(err)
 	}
@@ -156,13 +171,13 @@ func (b Board) CurrentList() list.Model {
 	return b.Lists[b.Focused]
 }
 
-func (b *Board) MoveToNext() tea.Msg {
-	if len(b.Lists[b.Focused].Items()) == 0 {
+func (b *Board) Move(from, to task.Status) tea.Msg {
+	currentStatus := from
+	if len(b.Lists[from].Items()) == 0 {
 		return nil
 	}
 	i := b.CurrentList().Index()
-	currentStatus := b.Focused
-	nextStatus := task.Next(currentStatus)
+	nextStatus := to
 	items := b.CurrentList().Items()
 	item := items[i]
 	items = removeItemFromSlice(items, i)
@@ -172,14 +187,94 @@ func (b *Board) MoveToNext() tea.Msg {
 		currentStatus: items,
 		nextStatus:    nextItems,
 	}}
-	selectedTask := item.(task.Task)
-	b.Config.Lists[b.Focused].Items = removeItemFromSlice(b.Config.Lists[b.Focused].Items, i)
-	b.Config.Lists[nextStatus].Items = append(b.Config.Lists[nextStatus].Items, selectedTask.Path)
 	return msg
+}
+
+func (b *Board) MoveToPrev() tea.Msg {
+	return b.Move(b.Focused, task.Prev(b.Focused))
+}
+
+func (b *Board) MoveToNext() tea.Msg {
+	return b.Move(b.Focused, task.Next(b.Focused))
 }
 
 func (b Board) CurrentTask() task.Task {
 	return b.CurrentList().SelectedItem().(task.Task)
+}
+
+func (b Board) UpdateCurrentTask(newContent string) tea.Cmd {
+	return func() tea.Msg {
+		i := b.Lists[b.Focused].Index()
+		items := b.Lists[b.Focused].Items()
+		t := items[i].(task.Task)
+		t.Content = newContent
+		if _, err := os.Stat(t.Path); !errors.Is(err, os.ErrNotExist) && err != nil {
+			panic(err)
+		}
+		err := os.WriteFile(t.Path, []byte(newContent), 0666)
+		if err != nil {
+			panic(err)
+		}
+		items[i] = list.Item(t)
+		return UpdateLists{Lists: map[task.Status][]list.Item{
+			b.Focused: items,
+		}}
+	}
+}
+
+func (b Board) Quit() tea.Cmd {
+	configStr, err := json.Marshal(b.Config)
+	if err != nil {
+		return tea.Quit
+	}
+	_ = os.WriteFile(configPath(), configStr, 0666)
+	return tea.Quit
+}
+
+func (b Board) DeleteCurrent() tea.Cmd {
+	return func() tea.Msg {
+		i := b.Lists[b.Focused].Index()
+		items := b.Lists[b.Focused].Items()
+		return UpdateLists{Lists: map[task.Status][]list.Item{
+			b.Focused: removeItemFromSlice(items, i),
+		}}
+	}
+}
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func RandStringBytes(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+	return string(b)
+}
+
+func (b Board) CreateTask() tea.Cmd {
+	updateListCmd := func() tea.Msg {
+		h, err := homedir.Dir()
+		if err != nil {
+			panic(err)
+		}
+		p := path.Join(h, "kancli", "tasks", RandStringBytes(10)+".md")
+		err = os.WriteFile(p, []byte("\n"), 0666)
+		if err != nil {
+			panic(err)
+		}
+		t, err := task.NewFromFile(p)
+		if err != nil {
+			panic(err)
+		}
+		l := append(b.CurrentList().Items(), list.Item(t))
+		return UpdateLists{Lists: map[task.Status][]list.Item{
+			b.Focused: l,
+		}}
+	}
+	editCmd := func() tea.Msg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e"), Alt: false}
+	}
+	return tea.Sequence(updateListCmd, editCmd)
 }
 
 func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -187,20 +282,41 @@ func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd  tea.Cmd
 		cmds []tea.Cmd
 	)
+	//fmt.Printf("%+v\n", msg)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if b.state == TaskEdit {
+			if msg.Type == tea.KeyEsc {
+				b.state = BoardView
+				return b, b.UpdateCurrentTask(b.Editor.Value())
+			}
+			break
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
-			return b, tea.Quit
+			if b.state == TaskView {
+				b.state = BoardView
+				return b, nil
+			}
+			return b, b.Quit()
 		case "right":
 			b.Focused = task.Next(b.Focused)
 		case "left":
 			b.Focused = task.Prev(b.Focused)
-		case " ":
+		case " ", "ctrl+right":
 			return b, b.MoveToNext
+		case "ctrl+left":
+			return b, b.MoveToPrev
 		case "enter":
-			b.RenderTask = !b.RenderTask
+			b.state = TaskView
 			b.Pager.Height = b.Height
+			return b, b.CurrentTask().Render(b.Width)
+		case "delete":
+			return b, b.DeleteCurrent()
+		case "n":
+			return b, b.CreateTask()
+		case "e":
+			b.state = TaskEdit
 			return b, b.CurrentTask().Render(b.Width)
 		}
 	case ReadyMsg:
@@ -212,20 +328,39 @@ func (b Board) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateLists:
 		for i, v := range msg.Lists {
 			b.Lists[i].SetItems(v)
+			b.Config.Lists[i].Items = []string{}
+			for _, vv := range v {
+				b.Config.Lists[i].Items = append(b.Config.Lists[i].Items, vv.(task.Task).Path)
+			}
 		}
 	case tea.WindowSizeMsg:
 		b.Width = msg.Width
 		b.Height = msg.Height
 		b.Pager.Width = b.Width
 		b.Pager.Height = b.Height
-		if b.RenderTask {
-			return b, b.CurrentTask().Render(b.Width)
+		b.Editor.SetHeight(msg.Height)
+		b.Editor.SetWidth(msg.Width)
+		if b.state == TaskView {
+			cmd = b.CurrentTask().Render(b.Width)
 		}
 	case task.ContentRenderedMsg:
-		b.Pager.SetContent(string(msg))
+		if b.state == TaskView {
+			b.Pager.SetContent(string(msg))
+		} else if b.state == TaskEdit {
+			b.Editor.SetValue(b.CurrentTask().Content)
+			for b.Editor.Line() > 0 {
+				b.Editor.CursorUp()
+			}
+			b.Editor.CursorStart()
+			return b, b.Editor.Focus()
+		}
 	}
-	if b.RenderTask {
+	if b.state == TaskView {
 		b.Pager, cmd = b.Pager.Update(msg)
+		return b, cmd
+	} else if b.state == TaskEdit {
+		fmt.Printf("%+v", msg)
+		b.Editor, cmd = b.Editor.Update(msg)
 		return b, cmd
 	} else if b.Ready {
 		b.Lists[b.Focused], cmd = b.Lists[b.Focused].Update(msg)
@@ -237,8 +372,11 @@ func (b Board) View() string {
 	if !b.Ready {
 		return fmt.Sprintf("loading... [%+v], %v, %v", b.Lists, b.Width, b.Height)
 	}
-	if b.RenderTask {
+	if b.state == TaskView {
 		return b.Pager.View()
+	}
+	if b.state == TaskEdit {
+		return b.Editor.View()
 	}
 	b.Resize()
 	var views []string
@@ -253,5 +391,7 @@ func (b Board) View() string {
 }
 
 func New() Board {
-	return Board{}
+	ta := textarea.New()
+	ta.CharLimit = 0
+	return Board{Editor: ta}
 }
